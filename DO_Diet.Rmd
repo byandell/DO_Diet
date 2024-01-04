@@ -1,0 +1,322 @@
+---
+title: "DO_Diet"
+author: "Brian Yandell"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(qtl2)
+library(qtl2ggplot)
+```
+```{r}
+chrname <- "19"
+traitname <- "Scd1"
+```
+
+
+# Dataset Setup
+
+```{r}
+datadir <- "data"
+```
+
+## 8 allele probabilities
+
+```{r}
+fst_dir <- file.path(datadir, "fst_genoprob")
+system.time(aprobs <- 
+  subset(readRDS(file.path(fst_dir, "aprobs_fstindex.rds")),
+         chr = chrname))
+```
+
+## 36 allele pair probabilities
+
+Not loaded automatically. Load later if needed.
+
+```{r eval=FALSE}
+fst_dir <- file.path(datadir, "fst_genoprob36")
+probs <- readRDS(file.path(fst_dir, "probs_fstindex.rds"))
+```
+
+## Physical Map and Kinship
+
+```{r}
+# data/gigamuga_map_test_v2.RDS
+pmap <- readRDS(file.path(datadir, "pmap.rds"))
+```
+
+```{r}
+# data/K_1176_DietDO.rds
+kinship <- readRDS(file.path(datadir, "kinship.rds"))
+```
+
+# RNA
+
+Use Wave and Batch as addcovar
+
+Pnpla3 on chr15
+
+```{r eval=FALSE}
+if(!file.exists(gene_info_rds <- file.path(datadir, "geno_info.rds"))) {
+  gene_info <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_gene_expression_matrix_app.csv")) |>
+    dplyr::select(-matches("DO_"))
+  saveRDS(gene_info, gene_info_rds)
+} else {
+  gene_info <- readRDS(gene_info_rds)
+}
+```
+
+```{r}
+# Read gene data and combine gene name and ENSEMBL ID.
+if(!file.exists(fname <- "data/gene.rds")) {
+  gene <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_gene_expression_matrix_app.csv")) |>
+    dplyr::mutate(ensembl_gene_id = stringr::str_remove(ensembl_gene_id, "ENSMUSG0+")) |>
+    tidyr::unite(gene, external_gene_name, ensembl_gene_id, na.rm = TRUE) |>
+    dplyr::select(gene, matches("DO_")) |>
+    dplyr::filter(!is.na(gene)) |>
+    as.data.frame()
+  rownames(gene) <- gene$gene
+  # Change to matrix and fix row names to match other objects.
+  gene <- t(as.matrix(gene[,-1]))
+  rownames(gene) <- paste0("DO", stringr::str_pad(as.integer(
+    stringr::str_remove(rownames(gene), "^DO_")), 4, pad = "0"))
+  # Remove genes with all missing data.
+  gene <- gene[, apply(gene,2, function(x) !all(is.na(x)))]
+  saveRDS(gene, file.path(datadir, fname))
+} else {
+  gene <- readRDS(fname)
+}
+```
+
+```{r eval = FALSE}
+gene_norm <- apply(gene, 2, qtl2mediate::nqrank)
+saveRDS(gene_norm, file.path(datadir, "gene_norm.rds"))
+```
+
+## Covariates
+
+```{r}
+# data/Phenotype files/clinical data sets/Final in vivo DO data for analysis (raw and computed).xlsx
+Physio <- readxl::read_excel(file.path(datadir, "Physio.xlsx"), sheet = "Data") |>
+  tibble::column_to_rownames("mouse")
+```
+
+```{r}
+addcovar <- stats::model.matrix(~ Gen_Lit + Sex * Diet.name,
+                                Physio |> select(Gen_Lit, Sex, Diet.name))[,-1]
+intcovar <- addcovar[,"Diet.nameHF", drop = FALSE]
+```
+
+## Focus on Scd1
+
+```{r eval = FALSE}
+Scd1_info <- gene_info |> filter(external_gene_name == "Scd1")
+```
+
+```{r}
+Scd1_ascan <- scan1(subset(aprobs, chr = "19"),
+                    gene[, grep("Scd1", colnames(gene)), drop = FALSE],
+                    kinship["19"], addcovar, intcovar = intcovar,
+                    cores = 10)
+```
+
+```{r}
+plot(Scd1_ascan, pmap)
+```
+
+```{r}
+find_peaks(Scd1_ascan, pmap, threshold = 9, drop = 2)
+```
+
+```{r}
+autoplot(Scd1_ascan, pmap)
+```
+
+```{r}
+autoplot(Scd1_ascan, pmap, chr = 19, xlim = c(44, 45))
+```
+
+```{r}
+Scd1_coef <- scan1coef(subset(aprobs, chr = "19"), 
+                       gene[, grep("Scd1", colnames(gene)), drop = FALSE],
+                       kinship["19"], addcovar, intcovar = intcovar)
+```
+
+```{r}
+autoplot(Scd1_coef, pmap["19"]) + xlim(43,45) + ylim(-1,1) +
+  geom_vline(xintercept = 44.46126, col = "grey")
+```
+
+## SNP Association Mapping
+
+```{r}
+snpdb_file <- "data/cc_variants.sqlite"
+query_variant <- qtl2::create_variant_query_func(snpdb_file)
+snpinfo <- query_variant("19", 44, 45)
+```
+
+Need to change names of alleles
+
+```{r}
+names(snpinfo)[8:15] <- names(qtl2::CCcolors)
+names(snpinfo)[1] <- "snp_id"
+```
+
+Perform SNP association mapping.
+It is possible to use `qtl2::scan1snps` instead, which bundles these three routines,
+but we want to have the SNP probabilities for later use.
+
+```{r}
+snpinfo <- qtl2::index_snps(pmap, snpinfo)
+snppr <- qtl2::genoprob_to_snpprob(aprobs, snpinfo)
+```
+
+```{r}
+scan_snppr <- qtl2::scan1(
+  snppr,
+  gene[, grep("Scd1", colnames(gene)), drop = FALSE],
+  kinship["19"], addcovar, intcovar = intcovar)
+```
+
+
+```{r}
+autoplot(scan_snppr, snpinfo, drop_hilit = 5)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=5, cex=2)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="all", drop_hilit=5, cex=2)
+```
+
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=3, cex=2,
+     show_all_snps = FALSE)
+```
+
+## qtl2pattern
+
+scan1pattern does not pass on incovar yet.
+
+```{r}
+top_snps_tbl <- qtl2pattern::top_snps_pattern(scan_snppr, snpinfo)
+```
+
+```{r}
+(patterns <- summary(top_snps_tbl))
+```
+
+```{r}
+scan_pat <- qtl2pattern::scan1pattern(
+  snppr, 
+  gene[, grep("Scd1", colnames(gene)), drop = FALSE],
+  kinship["19"], addcovar,
+  map = pmap,
+  patterns = patterns)
+```
+
+
+```{r}
+summary(scan_pat$scan, pmap)
+```
+
+```{r}
+plot(scan_pat$scan, snpinfo)
+```
+
+
+# Mixed Modules
+
+Here are 20 interesting-looking modules where I combined rankz-transformed RNA (gene-level), metabolites and lipids from the founder liver study, and then allowed them to group into modules based on their correlation structure. I focused on modules that contain mixed traits (e.g., RNAs and lipids, or RNAs and metabolites, or all three), and used the ANOVA to highlight those that show strain*diet-dependent differences. There are many modules showing very interesting relationships between transcripts and lipids or metabolites that make sense based on literature. There are many more modules that show strong diet-, sex- or strain-dependent differences. I believe we can harvest a handful from this list that are suitable for experimental validation, asking if the correlation between transcript and lipids or transcript and metabolites reflect a causal relationship. In the case of G0s2 in the Plum1 module, it is well-established that G0s2 positively correlates with liver TG levels, giving me added confidence in this approach. The excel sheet contains the modules and their memberships for those included in the ppt deck.
+ 
+The files can be found in this folder on the research drive:
+"data/DO diet RNA analysis/Signed gene level mixed modules"
+
+# SNP Info
+
+https://kbroman.org/MUGAarrays/new_annotations.html
+
+adattie/General/PersonalSharedFolder2/DO_R_Data_Objects/separate_genoprobs_etc/
+
+- cc_variants.sqlite
+- mouse_genes_mgi.sqlite
+
+```
+ls -lh
+total 10085296
+-rwxrwx---  1 brianyandell  staff   145M Feb  5  2023 Islet_RNA_rankz_withmousinfo.csv
+-rwxrwx---  1 brianyandell  staff   1.6G Feb  5  2019 attie_DO500_genoprobs_v5.rds
+-rwxrwx---  1 brianyandell  staff   3.7M Feb  5  2023 attie_v10_markers.csv
+-rwxrwx---  1 brianyandell  staff   3.0G Feb  5  2019 cc_variants.sqlite
+-rwxrwx---  1 brianyandell  staff   119B Feb  5  2023 covariate_list_v2.csv
+-rwxrwx---  1 brianyandell  staff   817K Feb  5  2019 grid_pmap.rds
+-rwxrwx---  1 brianyandell  staff    11M Feb  5  2019 mouse_genes_mgi.sqlite
+-rwxrwx---  1 brianyandell  staff    94B Feb  5  2023 test_these_QTL.csv
+```
+
+```{r}
+snpdb_file <- "cc_variants.sqlite"
+query_variant <- qtl2::create_variant_query_func(snpdb_file)
+snpinfo <- query_variant("15", 80, 90)
+```
+
+# Physio Genome Scan
+
+```{r}
+# data/Phenotype files/clinical data sets/Final in vivo DO data for analysis (raw and computed).xlsx
+readxl::excel_sheets(file.path(datadir, "Physio.xlsx"))
+```
+
+```{r}
+addcovar <- stats::model.matrix(~ Gen_Lit + Sex * Diet.name,
+                                Physio |> select(Gen_Lit, Sex, Diet.name))[,-1]
+intcovar <- addcovar[,"Diet.nameHF", drop = FALSE]
+```
+
+```{r}
+glu_10wk <- scan1(aprobs, as.matrix(Physio[,"glu_10wk", drop = FALSE]),
+                  kinship, addcovar, intcovar = intcovar,
+                  cores = 10)
+```
+
+```{r}
+plot(glu_10wk, pmap)
+```
+
+```{r}
+find_peaks(glu_10wk, pmap, threshold = 9, drop = 2)
+```
+
+```{r}
+autoplot(glu_10wk, pmap, chr = 6)
+```
+
+```{r}
+autoplot(glu_10wk, pmap, chr = 6, xlim = c(100, 120))
+```
+
+```{r}
+glu_10wk_coef <- scan1coef(subset(aprobs, chr = 6),
+                           as.matrix(Physio[,"glu_10wk", drop = FALSE]),
+                           kinship[["6"]], addcovar, intcovar = intcovar)
+```
+
+```{r}
+autoplot(glu_10wk_coef, pmap["6"]) + xlim(100, 120) + ylim(-30,30)
+```
+
+
+

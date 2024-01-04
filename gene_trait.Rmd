@@ -1,0 +1,368 @@
+---
+title: "Gene Trait Scan"
+author: "Brian Yandell"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_document
+params:
+  trait: "Scd1"
+  isoformid: ""
+  chr: "19"
+  width: 0.5
+  lod_drop: 5
+  snp36: TRUE
+  datadir: "data"
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Setup
+
+```{r message=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(qtl2)
+library(qtl2fst)
+library(qtl2ggplot)
+```
+
+```{r}
+chrname <- as.character(params$chr)
+traitname <- as.character(params$trait)
+lod_drop <- as.numeric(params$lod_drop)
+chrwidth <- as.numeric(params$width)
+isoformid <- as.character(params$isoformid)
+snp36 <- as.logical(params$snp36) # use 36 genotypes for SNPs
+datadir <- as.character(params$datadir)
+```
+
+Gene trait `r traitname` (optional isoform `r isoformid`) on chr `r chrname`.
+Window half-width of `r chrwidth` with SNP LOD drop of `r lod_drop` based on
+`r ifelse(snp36, "36 allele pairs", "8 alleles")`.
+Data is folder `datadir`.
+
+# Dataset Setup
+
+```{r}
+## 8 allele probabilities
+
+aprobs_chr <- subset(
+  readRDS(file.path(datadir, "fst_genoprob", "aprobs_fstindex.rds")),
+  chr = chrname)
+
+## Physical Map and Kinship
+
+# data/gigamuga_map_test_v2.RDS
+pmap <- readRDS(file.path(datadir, "pmap.rds"))
+
+# data/K_1176_DietDO.rds
+kinship_chr <- readRDS(file.path(datadir, "kinship.rds"))[chrname]
+
+## Covariates
+
+# data/Phenotype files/clinical data sets/Final in vivo DO data for analysis (raw and computed).xlsx
+Physio <- readxl::read_excel(file.path(datadir, "Physio.xlsx"),
+                             sheet = "Data") |>
+  tibble::column_to_rownames("mouse")
+addcovar <- stats::model.matrix(
+  ~ Gen_Lit + Sex * Diet.name,
+  Physio |> dplyr::select(Gen_Lit, Sex, Diet.name))[,-1]
+intcovar <- addcovar[,"Diet.nameHF", drop = FALSE]
+
+## RNA Data
+if(isoformid == "") {
+  # Read gene data and combine gene name and ENSEMBL ID.
+  gene_trait <- readRDS("data/gene.rds")
+  gene_trait <- gene_trait[, 
+    grep(paste(paste0(traitname, "_"), collapse = "|"),
+         colnames(gene_trait)), drop = FALSE]
+} else {
+  ## Isoform data
+
+  gene_trait <- readRDS("data/isoform.rds")
+  isoformname <- grep(paste(paste0(traitname, "_"), collapse = "|"),
+                            colnames(gene_trait))
+  isoformname <- isoformname[grep(isoformid, colnames(gene_trait)[isoformname])]
+
+  gene_trait <- gene_trait[, isoformname, drop = FALSE]
+  traitname <- isoformname
+}
+```
+
+# Trait Scan
+
+```{r}
+trait_addscan_chr <- qtl2::scan1(aprobs_chr, gene_trait, kinship_chr, addcovar,
+                             cores = 0)
+
+trait_intscan_chr <- qtl2::scan1(aprobs_chr, gene_trait, kinship_chr, addcovar,
+                             intcovar = intcovar, cores = 0)
+
+plot(trait_intscan_chr, pmap, col = "red")
+plot(trait_addscan_chr, pmap, add = TRUE)
+```
+
+```{r}
+(trait_peaks <- find_peaks(trait_intscan_chr, pmap, threshold = 9, drop = 2))
+```
+
+## Zoom in to 2Mb window
+
+```{r}
+plot(trait_intscan_chr, pmap, col = "red",
+     xlim = trait_peaks$pos + c(-1,1) * chrwidth)
+plot(trait_addscan_chr, pmap, add = TRUE,
+     xlim = trait_peaks$pos + c(-1,1) * chrwidth)
+abline(v = trait_peaks$pos, col = "gray", lwd = 2)
+```
+
+# Strain Coefficients
+
+```{r}
+trait_nocoef <- scan1coef(aprobs_chr, gene_trait, kinship_chr)
+plot_coef(trait_nocoef, pmap[chrname], columns = 1:8)
+```
+
+```{r}
+trait_addcoef <- scan1coef(aprobs_chr, gene_trait, kinship_chr, addcovar)
+plot_coef(trait_addcoef, pmap[chrname], columns = 1:8,
+          xlim = trait_peaks$pos + c(-1,1))
+abline(v = trait_peaks$pos, col = "grey", lwd = 2)
+title(paste(traitname, "on chr", chrname))
+```
+
+The following plot is flawed as it only presents part of the solution.
+
+```{r}
+trait_intcoef <- scan1coef(aprobs_chr, gene_trait, kinship_chr, addcovar,
+                           intcovar = intcovar)
+
+plot_coef(trait_intcoef, pmap[chrname], columns = 1:8,
+          xlim = trait_peaks$pos + c(-1,1))
+abline(v = trait_peaks$pos, col = "grey", lwd = 2)
+title(paste(traitname, "on chr", chrname, "additive part of diet interaction"))
+```
+
+Following does separate coefficients by diet. 
+It is complicated by fact that `kinship` calculation does not include one mouse.
+
+```{r}
+wh_HF <- (addcovar[,"Diet.nameHF"] == 1)
+m <- match(rownames(addcovar), rownames(kinship_chr[[1]]))
+#rownames(addcovar)[is.na(m)]
+id_HF <- rownames(addcovar)[wh_HF & !is.na(m)]
+id_HC <- rownames(addcovar)[!wh_HF & !is.na(m)]
+
+trait_coef_HF <- scan1coef(
+  subset(aprobs_chr, ind = id_HF),
+  gene_trait[id_HF,, drop = FALSE],
+  kinship_chr, addcovar, intcovar = intcovar)
+
+plot_coef(trait_coef_HF, pmap[chrname], columns = 1:8,
+          xlim = trait_peaks$pos + c(-1,1))
+abline(v = trait_peaks$pos, col = "grey", lwd = 2)
+title(paste("HF Diet", traitname, "on chr", chrname))
+
+trait_coef_HC <- scan1coef(
+  subset(aprobs_chr, ind = id_HC),
+  gene_trait[id_HC,, drop = FALSE],
+  kinship_chr, addcovar, intcovar = intcovar)
+
+plot_coef(trait_coef_HC, pmap[chrname], columns = 1:8,
+          xlim = trait_peaks$pos + c(-1,1))
+abline(v = trait_peaks$pos, col = "grey", lwd = 2)
+title(paste("HC Diet", traitname, "on chr", chrname))
+```
+
+# SNP Associations
+
+SNP genotype probabilities are calculated as 2-level additive (using `aprobs_chr` from the 8-allele genotype probablities) or 3-level full (using `probs_chr` from the 36-allele-pair genotype probabilities).
+The latter are used with `snp36` is `TRUE` (default) and the 36-pair
+probabilities are available.
+
+```{r}
+chrpos <- trait_peaks$pos
+```
+
+```{r}
+snpdb_file <- "data/cc_variants.sqlite"
+query_variant <- qtl2::create_variant_query_func(snpdb_file)
+snpinfo <- query_variant(chrname,
+                         chrpos - chrwidth,
+                         chrpos + chrwidth)
+```
+
+Need to change names of alleles
+
+```{r}
+names(snpinfo)[8:15] <- names(qtl2::CCcolors)
+names(snpinfo)[1] <- "snp_id"
+```
+
+Perform SNP association mapping.
+It is possible to use `qtl2::scan1snps` instead, which bundles these three routines,
+but we want to have the SNP probabilities for later use.
+
+```{r}
+snpinfo <- qtl2::index_snps(pmap, snpinfo)
+```
+
+```{r}
+if(snp36 & file.exists(file.path(datadir, "fst_genoprob36"))) {
+  snppr <- qtl2::genoprob_to_snpprob(
+    subset(
+      readRDS(file.path(datadir, "fst_genoprob36", "probs_fstindex.rds")),
+      chr = chrname),
+    snpinfo)
+} else {
+  snppr <- qtl2::genoprob_to_snpprob(aprobs_chr, snpinfo)
+}
+```
+
+```{r}
+scan_snppr <- qtl2::scan1(snppr, gene_trait, kinship_chr, addcovar,
+                          intcovar = intcovar)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, drop_hilit = lod_drop)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="all", drop_hilit=lod_drop, cex=2)
+```
+
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
+     show_all_snps = FALSE)
+```
+
+```{r}
+autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
+     show_all_snps = TRUE)
+```
+
+```{r}
+(snp_peak <- qtl2::find_peaks(scan_snppr, snpinfo))
+```
+
+Find top snps for distinct SDPs within `r `lod_drop` of peak.
+
+```{r}
+(top_snps_tbl <-
+   qtl2pattern::top_snps_pattern(scan_snppr, snpinfo,
+                                 drop = lod_drop,
+                                 show_all_snps = FALSE) |>
+  select(snp_id, pos, sdp, index, lod) |>
+  distinct(sdp, .keep_all = TRUE) |>
+  arrange(desc(lod)))
+```
+
+# Use best SNPs as covariate
+
+```{r}
+snp_id <- top_snps_tbl$snp_id
+snp_df <- dim(snppr[[1]])[2] - 1
+snp_geno <- matrix(NA, nrow(addcovar), length(snp_id) * snp_df)
+rownames(snp_geno) <- rownames(addcovar)
+if(snp_df == 1) {
+  colnames(snp_geno) <- snp_id
+} else {
+  colnames(snp_geno) <- paste(rep(snp_id, each = 2), seq(snp_df), sep = "_")
+}
+snp_geno[dimnames(snppr[[1]])[[1]],] <- snppr[[1]][, -(1 + snp_df), snp_id]
+```
+
+```{r}
+addcovar_geno <- cbind(addcovar, snp_geno)
+addcovar_geno1 <- cbind(addcovar, snp_geno[,seq(snp_df), drop = FALSE])
+```
+
+```{r}
+trait_genoscan_chr <- qtl2::scan1(aprobs_chr, gene_trait,
+                                  kinship_chr, addcovar_geno,
+                                  intcovar = intcovar, cores = 10)
+trait_geno1scan_chr <- qtl2::scan1(aprobs_chr, gene_trait,
+                                  kinship_chr, addcovar_geno1,
+                                  intcovar = intcovar, cores = 10)
+```
+
+```{r}
+bind_rows(
+  add = qtl2::find_peaks(trait_addscan_chr, pmap),
+  int = qtl2::find_peaks(trait_intscan_chr, pmap),
+  geno1 = qtl2::find_peaks(trait_geno1scan_chr, pmap),
+  geno = qtl2::find_peaks(trait_genoscan_chr, pmap),
+  .id = "scan")
+```
+
+```{r}
+plot(trait_intscan_chr, pmap, col = "red",
+     xlim = trait_peaks$pos + c(-1,1))
+plot(trait_genoscan_chr, pmap, col = "blue", add = TRUE,
+     xlim = trait_peaks$pos + c(-1,1))
+plot(trait_geno1scan_chr, pmap, col = "purple", add = TRUE,
+     xlim = trait_peaks$pos + c(-1,1))
+plot(trait_addscan_chr, pmap, col = "green", add = TRUE,
+     xlim = trait_peaks$pos + c(-1,1))
+abline(v = trait_peaks$pos, col = "gray", lwd = 2)
+abline(v = snp_peak$pos, col = "blue", lwd = 2)
+```
+
+```{r}
+knitr::knit_exit()
+```
+
+## qtl2pattern
+
+scan1pattern does not pass on incovar yet.
+It also does not seem to work properly.
+It should use the SDP in snpinfo identified to index snp to impute SNP probabilities
+for pattern. It may be set up to do this with pmap but have some sort of disconnect in code.
+
+```{r}
+top_snps_tbl <- qtl2pattern::top_snps_pattern(scan_snppr, snpinfo)
+```
+
+```{r}
+(patterns <- summary(top_snps_tbl))
+```
+
+```{r}
+head(summary(top_snps_tbl, "best"))
+```
+
+```{r}
+scan_pat <- qtl2pattern::scan1pattern(snppr, gene_trait, kinship_chr, addcovar,
+                                      map = pmap, patterns = patterns)
+```
+
+
+```{r}
+autoplot(scan_pat$scan, snpinfo, patterns = "hilit")
+```
+
+```{r}
+summary(scan_pat$scan, pmap, chr = chrname)
+```
+
+```{r}
+qtl2::find_peaks()
+```
+
+```{r}
+tmp <- snpinfo[!duplicated(snpinfo$snp_id), "pos"]
+names(tmp) <- unique(snpinfo$snp_id)
+tmp <- list("19" = tmp)
+```
+
+```{r}
+qtl2pattern::ggplot_scan1pattern(scan_pat, tmp)
+```

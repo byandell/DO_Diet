@@ -1,0 +1,165 @@
+---
+title: "DO_Diet Data Setup"
+author: "Brian Yandell"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_document
+params:
+  datadir: "data"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(qtl2)
+library(qtl2fst)
+library(qtl2ggplot)
+```
+
+# Dataset Setup
+
+```{r}
+datadir <- params$datadir
+```
+
+This creates faster versions of data in the parameter-supplied directory `r datadir`:
+
+- `aprobs`: FST 8-allele probabilites
+  + `aprobs <- readRDS(file.path(datadir, "fst_genoprob", "aprobs_fstindex.rds"))
+- `probs`: FST 36-genotype (allele pair) probabilities
+  + `probs <- readRDS(file.path(datadir, "fst_genoprob36", "probs_fstindex.rds"))
+- `gene, gene_info`: liver mRNAs gene expression
+  + `gene_info <- readRDS(file.path(datadir, "gene_info.rds"))
+  + `gene <- readRDS(file.path(datadir, "gene.rds"))
+- `isoform, isoform_info`: liver mRNAs gene expression
+  + `isoform_info <- readRDS(file.path(datadir, "isoform_info.rds"))
+  + `isoform <- readRDS(file.path(datadir, "isoform.rds"))
+
+## 8 allele probabilities
+
+```{r}
+fst_dir <- file.path(datadir, "fst_genoprob")
+if(!file.exists(file.path(fst_dir, "aprobs_fstindex.rds"))) {
+  if(!dir.exists(fst_dir)) {
+    dir.create(fst_dir)
+  }
+  aprobs <- qtl2fst::fst_genoprob(
+    readRDS(file.path(datadir, "ResearchDrive/final_genoprobs_1176.rds")),
+    "aprobs", fst_dir, quiet = TRUE)
+} else {
+  aprobs <- readRDS(file.path(fst_dir, "aprobs_fstindex.rds"))
+}
+# Make sure `fst_path` corresponds to `fst_dir`.
+fst_path <- file.path(fst_dir, "aprobs")
+if(qtl2fst::fst_path(aprobs) != fst_path) {
+  aprobs <- qtl2fst::replace_path(aprobs, fst_path)
+  saveRDS(aprobs, file.path(fst_dir, "aprobs_fstindex.rds"))
+}
+```
+
+## 36 allele pair probabilities
+
+Need to correct `DO` names as they were recorded without leading 0's.
+
+```{r}
+fst_dir <- file.path(datadir, "fst_genoprob36")
+if(!file.exists(file.path(fst_dir, "probs_fstindex.rds"))) {
+  if(!dir.exists(fst_dir)) {
+    dir.create(fst_dir)
+  }
+  probs <- readRDS(file.path(datadir, "attie_genoprobs_grcm39.rds"))
+  mouseid <- paste0("DO",stringr::str_pad(as.integer(
+    stringr::str_remove(dimnames(probs[[1]])[[1]], "^DO")), 4, pad = "0"))
+  for(i in names(probs)) {
+    dimnames(probs[[i]])[[1]] <- mouseid
+  }
+  probs <- qtl2fst::fst_genoprob(probs,
+    "probs", fst_dir, quiet = FALSE, overwrite = TRUE)
+} else {
+  probs <- readRDS(file.path(fst_dir, "probs_fstindex.rds"))
+}
+# Make sure `fst_path` corresponds to `fst_dir`.
+fst_path <- file.path(fst_dir, "probs")
+if(qtl2fst::fst_path(probs) != fst_path) {
+  probs <- qtl2fst::replace_path(probs, fst_path)
+  saveRDS(probs, file.path(fst_dir, "probs_fstindex.rds"))
+}
+```
+
+# Gene-level RNA
+
+```{r eval=FALSE}
+if(!file.exists(gene_info_rds <- file.path(datadir, "gene_info.rds"))) {
+  gene_info <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_gene_expression_matrix_app.csv")) |>
+    dplyr::select(-matches("DO_"))
+  saveRDS(gene_info, gene_info_rds)
+} else {
+  gene_info <- readRDS(gene_info_rds)
+}
+```
+
+```{r}
+# Read gene data and combine gene name and ENSEMBL ID.
+if(!file.exists(gene_rds <- file.path(datadir, "gene.rds"))) {
+  gene <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_gene_expression_matrix_app.csv")) |>
+    dplyr::mutate(ensembl_gene_id = stringr::str_remove(ensembl_gene_id, "ENSMUSG0+")) |>
+    tidyr::unite(gene, external_gene_name, ensembl_gene_id, na.rm = TRUE) |>
+    dplyr::select(gene, matches("DO_")) |>
+    dplyr::filter(!is.na(gene)) |>
+    as.data.frame()
+  rownames(gene) <- gene$gene
+  # Change to matrix and fix row names to match other objects.
+  gene <- t(as.matrix(gene[,-1]))
+  rownames(gene) <- paste0("DO", stringr::str_pad(as.integer(
+    stringr::str_remove(rownames(gene), "^DO_")), 4, pad = "0"))
+  # Remove genes with all missing data.
+  gene <- gene[, apply(gene,2, function(x) !all(is.na(x)))]
+  saveRDS(gene, gene_rds)
+} else {
+  gene <- readRDS(gene_rds)
+}
+```
+
+# Isoform-level RNA
+
+```{r eval=FALSE}
+if(!file.exists(isoform_info_rds <- file.path(datadir, "isoform_info.rds"))) {
+  isoform_info <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_isoform_expression_matrix_app.csv")) |>
+    dplyr::select(-matches("DO_"))
+  saveRDS(isoform_info, isoform_info_rds)
+} else {
+  isoform_info <- readRDS(isoform_info_rds)
+}
+```
+
+```{r}
+# Read isoform data and combine isoform name and ENSEMBL ID.
+if(!file.exists(isoform_rds <- file.path(datadir, "isoform.rds"))) {
+  isoform <- readr::read_csv(file.path(datadir,
+    "liver RNA/vsd_DO_isoform_expression_matrix_app.csv")) |>
+    dplyr::rename(ensembl_isoform_id = "X") |>
+    dplyr::mutate(ensembl_gene_id = stringr::str_remove(ensembl_gene_id, "ENSMUSG0+"),
+                  ensembl_isoform_id = stringr::str_remove(ensembl_isoform_id, "ENSMUST0+")) |>
+    tidyr::unite(isoform, external_gene_name, ensembl_gene_id, ensembl_isoform_id, na.rm = TRUE) |>
+    dplyr::select(isoform, matches("DO[0-9]+")) |>
+    dplyr::filter(!is.na(isoform)) |>
+    as.data.frame()
+  rownames(isoform) <- isoform$isoform
+  # Change to matrix and fix row names to match other objects.
+  isoform <- t(as.matrix(isoform[,-1]))
+  rownames(isoform) <- paste0("DO", stringr::str_pad(as.integer(
+    stringr::str_remove(rownames(isoform), "^DO_")), 4, pad = "0"))
+  # Remove isoforms with all missing data.
+  isoform <- isoform[, apply(isoform,2, function(x) !all(is.na(x)))]
+  saveRDS(isoform, isoform_rds)
+} else {
+  isoform <- readRDS(isoform_rds)
+}
+```
