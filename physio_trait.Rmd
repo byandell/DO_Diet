@@ -283,16 +283,6 @@ autoplot(scan_snppr, snpinfo, patterns="all", drop_hilit=lod_drop, cex=2)
 
 
 ```{r}
-autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
-     show_all_snps = FALSE)
-```
-
-```{r}
-autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
-     show_all_snps = TRUE)
-```
-
-```{r}
 (snp_peak <- qtl2::find_peaks(scan_snppr, snpinfo))
 ```
 
@@ -424,6 +414,12 @@ plot(trait_gene_isoscan_chr, pmap, col = "black", add = TRUE,
 plot(trait_addscan_chr, pmap, col = "green", add = TRUE,
      xlim = trait_peaks$pos + c(-1,1))
 abline(v = trait_peaks$pos, col = "gray", lwd = 2)
+```
+
+# Mediation
+
+```{r}
+
 ```
 
 ```{r}

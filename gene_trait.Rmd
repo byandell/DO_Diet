@@ -240,16 +240,6 @@ autoplot(scan_snppr, snpinfo, patterns="all", drop_hilit=lod_drop, cex=2)
 
 
 ```{r}
-autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
-     show_all_snps = FALSE)
-```
-
-```{r}
-autoplot(scan_snppr, snpinfo, patterns="hilit", drop_hilit=lod_drop, cex=2,
-     show_all_snps = TRUE)
-```
-
-```{r}
 (snp_peak <- qtl2::find_peaks(scan_snppr, snpinfo))
 ```
 
