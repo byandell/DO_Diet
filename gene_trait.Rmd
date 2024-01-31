@@ -38,10 +38,10 @@ snp36 <- as.logical(params$snp36) # use 36 genotypes for SNPs
 datadir <- as.character(params$datadir)
 ```
 
-Gene trait `r traitname` (optional isoform `r isoformid`) on chr `r chrname`.
+**Gene trait `r traitname` (optional isoform `r isoformid`) on chr `r chrname`.
 Window half-width of `r chrwidth` with SNP LOD drop of `r lod_drop` based on
 `r ifelse(snp36, "36 allele pairs", "8 alleles")`.
-Data is folder `datadir`.
+Data is in folder `datadir`.**
 
 # Dataset Setup
 
