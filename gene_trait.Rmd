@@ -4,12 +4,13 @@ author: "Brian Yandell"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output: html_document
 params:
-  trait: "Scd1"
+  trait: "Wfdc21"
   isoformid: ""
-  chr: "19"
+  chr: "11"
   width: 0.5
   lod_drop: 5
   snp36: TRUE
+  normscore: TRUE
   datadir: "data"
 ---
 
@@ -35,12 +36,14 @@ lod_drop <- as.numeric(params$lod_drop)
 chrwidth <- as.numeric(params$width)
 isoformid <- as.character(params$isoformid)
 snp36 <- as.logical(params$snp36) # use 36 genotypes for SNPs
+normscore <- as.logical(params$normscore) # use normal scores (nqrank)
 datadir <- as.character(params$datadir)
 ```
 
 **Gene trait `r traitname` (optional isoform `r isoformid`) on chr `r chrname`.
 Window half-width of `r chrwidth` with SNP LOD drop of `r lod_drop` based on
 `r ifelse(snp36, "36 allele pairs", "8 alleles")`.
+Data are `r ifelse(normscore, "", "not")` transformed by normal scores.
 Data is in folder `datadir`.**
 
 # Dataset Setup
@@ -88,6 +91,19 @@ if(isoformid == "") {
 
   gene_trait <- gene_trait[, isoformname, drop = FALSE]
   traitname <- isoformname
+}
+```
+
+Sort `gene_trait` to match Physio
+
+```{r}
+m <- match(rownames(Physio), rownames(gene_trait))
+gene_trait <- gene_trait[m,, drop = FALSE]
+```
+
+```{r}
+if(normscore) {
+  gene_trait <- foundr::nqrank(gene_trait)
 }
 ```
 
@@ -306,6 +322,114 @@ abline(v = trait_peaks$pos, col = "gray", lwd = 2)
 abline(v = snp_peak$pos, col = "blue", lwd = 2)
 ```
 
+### Plot and Analysis of Best SNP by Trait
+
+Proceed here assuming that we are working with `SNP36`.
+If not, get those.
+
+```{r}
+if(snp36) {
+  asnppr <- qtl2::genoprob_to_snpprob(aprobs_chr, snpinfo)
+} else {
+  asnppr <- snppr
+  snppr <- qtl2::genoprob_to_snpprob(
+    subset(
+      readRDS(file.path(datadir, "fst_genoprob36", "probs_fstindex.rds")),
+        chr = chrname),
+      snpinfo)
+}
+```
+
+```{r}
+asnp_df <- dim(asnppr[[1]])[2] - 1
+asnp_geno <- matrix(NA, nrow(addcovar), length(snp_id) * asnp_df)
+rownames(asnp_geno) <- rownames(addcovar)
+if(asnp_df == 1) {
+  colnames(asnp_geno) <- snp_id
+} else {
+  colnames(asnp_geno) <- paste(rep(snp_id, each = 2), seq(asnp_df), sep = "_")
+}
+asnp_geno[dimnames(asnppr[[1]])[[1]],] <- asnppr[[1]][, -(1 + asnp_df), snp_id]
+```
+
+Combine phenotype (`gene_trait`) and genotype (`snp_geno` or `asnp_geno`) along
+with covariates. Some machinations to impute genotypes from genoprobs.
+
+```{r}
+dat <- as.data.frame(cbind(gene_trait, round(snp_geno, 3)))
+names(dat) <- c("Wfdc1", "snp1", "snp2")
+dat$snp3 <- round(1 - dat$snp1 - dat$snp2, 3)
+dat <- dplyr::bind_cols(dat, dplyr::select(Physio, Sex,Diet.name))
+dat$geno <- unlist(apply(dat[, paste0("snp",1:3)], 1, function(x) {
+  y <- which.max(x)
+  if(length(y) == 0) y <- NA
+  if(!all(is.na(y)) & all(x[y] < 0.75)) y <- NA
+  y
+  }))
+dat <- dplyr::mutate(dat,
+                     geno = ifelse(is.na(geno), NA, c("A","H","B")[geno]),
+                     geno = factor(geno, c("A","H","B")),
+                     asnp = round(asnp_geno[,1], 3),
+                     ageno = round(2 * asnp),
+                     ageno = ifelse(abs(2 * asnp - ageno) > 0.25, NA, ageno),
+                     ageno = ifelse(is.na(ageno), NA, c("A","H","B")[3 - ageno]),
+                     ageno = factor(ageno, c("A","H","B")),
+                     wave = Physio$Gen_Lit)
+```
+
+Examine disagreements of 2-level vs 3-level SNPs
+
+```{r}
+dat |> dplyr::filter(geno != ageno)
+```
+
+Find missing data for 3-level SNPs.
+
+```{r}
+dat |> dplyr::filter(is.na(geno))
+```
+
+Fill in missing `geno` where possible using `ageno`.
+
+```{r}
+dat <- dplyr::mutate(dat,
+                     geno = ifelse(is.na(geno), as.character(ageno), as.character(geno)),
+                     geno = factor(geno, c("A","H","B")),
+                     add = unclass(geno) - 2,
+                     dom = abs(add))
+```
+
+Plot faceting by sex and diet, with colors for waves.
+
+```{r}
+ggplot2::ggplot(dat) +
+  ggplot2::aes(x = Wfdc1, y = geno) +
+  ggplot2::geom_jitter(aes(col = wave)) +
+  ggplot2::geom_boxplot(fill = "transparent") +
+  ggplot2::facet_grid(Sex ~ Diet.name) +
+  ggplot2::theme(legend.position = "none")
+```
+
+Formal linear model fit, allowing for interaction of SNP (`geno`) with sex and diet.
+
+```{r}
+fit <- lm(Wfdc1 ~ wave + Sex * Diet.name * geno, dat)
+```
+
+```{r}
+drop1(fit,fit, test="F")
+```
+
+Formal analysis to examine `add`itive and `dom`inance effects.
+
+```{r}
+fit <- lm(Wfdc1 ~ wave + Sex * Diet.name * (add + dom), dat)
+```
+
+```{r}
+drop1(fit,fit, test="F")
+```
+
 ```{r}
 knitr::knit_exit()
 ```
@@ -356,3 +480,5 @@ tmp <- list("19" = tmp)
 ```{r}
 qtl2pattern::ggplot_scan1pattern(scan_pat, tmp)
 ```
+
+
