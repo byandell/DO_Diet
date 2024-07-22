@@ -11,3 +11,5 @@ data/
 *.pdf
 *.pptx
 extra/
+*.csv
+*.history

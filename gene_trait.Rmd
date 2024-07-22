@@ -1,5 +1,4 @@
 ---
-title: "Gene Trait Scan"
 author: "Brian Yandell"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output: html_document
@@ -12,6 +11,9 @@ params:
   snp36: TRUE
   normscore: TRUE
   datadir: "data"
+---
+---
+title: "`r params$trait` on chr `r params$chr`"
 ---
 
 ```{r setup, include=FALSE, message=FALSE}
@@ -45,6 +47,8 @@ Window half-width of `r chrwidth` with SNP LOD drop of `r lod_drop` based on
 `r ifelse(snp36, "36 allele pairs", "8 alleles")`.
 Data are `r ifelse(normscore, "", "not")` transformed by normal scores.
 Data is in folder `datadir`.**
+Source code at
+[gene_trait.Rmd](https://github.com/byandell/DO_Diet/blob/master/gene_trait.Rmd).
 
 # Dataset Setup
 
@@ -103,7 +107,7 @@ gene_trait <- gene_trait[m,, drop = FALSE]
 
 ```{r}
 if(normscore) {
-  gene_trait <- foundr::nqrank(gene_trait)
+  gene_trait <- qtl2mediate::nqrank(gene_trait)
 }
 ```
 
@@ -357,7 +361,7 @@ with covariates. Some machinations to impute genotypes from genoprobs.
 
 ```{r}
 dat <- as.data.frame(cbind(gene_trait, round(snp_geno, 3)))
-names(dat) <- c("Wfdc1", "snp1", "snp2")
+names(dat) <- c(traitname, "snp1", "snp2")
 dat$snp3 <- round(1 - dat$snp1 - dat$snp2, 3)
 dat <- dplyr::bind_cols(dat, dplyr::select(Physio, Sex,Diet.name))
 dat$geno <- unlist(apply(dat[, paste0("snp",1:3)], 1, function(x) {
@@ -380,7 +384,7 @@ dat <- dplyr::mutate(dat,
 Examine disagreements of 2-level vs 3-level SNPs
 
 ```{r}
-dat |> dplyr::filter(geno != ageno)
+dat |> dplyr::filter(geno != ageno) |> dplyr::select(-1)
 ```
 
 Find missing data for 3-level SNPs.
@@ -403,7 +407,7 @@ Plot faceting by sex and diet, with colors for waves.
 
 ```{r}
 ggplot2::ggplot(dat) +
-  ggplot2::aes(x = Wfdc1, y = geno) +
+  ggplot2::aes(x = Wfdc21, y = geno) +
   ggplot2::geom_jitter(aes(col = wave)) +
   ggplot2::geom_boxplot(fill = "transparent") +
   ggplot2::facet_grid(Sex ~ Diet.name) +
@@ -413,7 +417,7 @@ ggplot2::ggplot(dat) +
 Formal linear model fit, allowing for interaction of SNP (`geno`) with sex and diet.
 
 ```{r}
-fit <- lm(Wfdc1 ~ wave + Sex * Diet.name * geno, dat)
+fit <- lm(formula(paste(traitname, "~ wave + Sex * Diet.name * geno")), dat)
 ```
 
 ```{r}
@@ -423,7 +427,8 @@ drop1(fit,fit, test="F")
 Formal analysis to examine `add`itive and `dom`inance effects.
 
 ```{r}
-fit <- lm(Wfdc1 ~ wave + Sex * Diet.name * (add + dom), dat)
+fit <- lm(formula(paste(traitname, "~ wave + Sex * Diet.name * (add + dom)")),
+          dat)
 ```
 
 ```{r}

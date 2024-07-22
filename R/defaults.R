@@ -1,0 +1,10 @@
+physioshort <- "cpep_ins"
+physioname <- "log10_cpep_ins_molar_ratio_15_14wk"
+genename <- "Wfdc21"
+isoformid <- ""
+chrname <- "11"
+chrwidth <- 1
+lod_drop <- 3
+snp36 <- TRUE
+normscore <- TRUE
+datadir <- "data"

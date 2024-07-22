@@ -1,18 +1,21 @@
 ---
-title: "Clinical Trait Scan"
 author: "Brian Yandell"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output: html_document
 params:
-  physiotrait: "percent_fat_17wk"
-  genetrait: "Glb1"
-  isoformid: "217583"
-  chr: "9"
-  width: 3
+  physioshort: "cpep_ins"
+  physioname: "log10_cpep_ins_molar_ratio_15_14wk"
+  genename: "Wfdc21"
+  isoformid: ""
+  chrname: "11"
+  chrwidth: 1
   lod_drop: 3
   snp36: TRUE
+  normscore: TRUE
   datadir: "data"
-
+---
+---
+title: "`r params$physioshort` with `r params$genetrait` on chr `r params$chr`"
 ---
 
 ```{r setup, include=FALSE, message=FALSE}
@@ -62,71 +65,30 @@ library(qtl2ggplot)
 ```
 
 ```{r}
-chrname <- params$chr
-physioname <- params$physiotrait
-genename <- params$genetrait
+chrname <- params$chrname
+physioshort <- params$physioshort
+physioname <- params$physioname
+genename <- params$genename
 isoformid <- params$isoformid
 lod_drop <- params$lod_drop
-chrwidth <- params$width
+chrwidth <- params$chrwidth
 snp36 <- as.logical(params$snp36) # use 36 genotypes for SNPs
+normscore <- as.logical(params$normscore) # use normal scores (nqrank)
 datadir <- as.character(params$datadir)
 ```
 
-**Clinical trait `r physioname` with covariate `r genename` (optional isoform `r isoformid`) on chr `r chrname`.
+**Clinical trait `r physioname` (`r physioshort`) with covariate `r genename` (optional isoform `r isoformid`) on chr `r chrname`.
 Window half-width of `r chrwidth` with SNP LOD drop of `r lod_drop` based on
 `r ifelse(snp36, "36 allele pairs", "8 alleles")`.
+Data are `r ifelse(normscore, "", "not")` transformed by normal scores.
 Data is folder `datadir`.**
+Source code at
+[physio_trait.Rmd](https://github.com/byandell/DO_Diet/blob/master/physio_trait.Rmd).
 
-# Dataset Setup
-
-```{r}
-datadir <- "data"
-
-## 8 allele probabilities
-
-fst_dir <- file.path(datadir, "fst_genoprob")
-aprobs_chr <- subset(readRDS(file.path(fst_dir, "aprobs_fstindex.rds")), chr = chrname)
-
-## Physical Map and Kinship
-
-# data/gigamuga_map_test_v2.RDS
-pmap <- readRDS(file.path(datadir, "pmap.rds"))
-
-# data/K_1176_DietDO.rds
-kinship_chr <- readRDS(file.path(datadir, "kinship.rds"))[chrname]
-
-## Covariates
-
-# data/Phenotype files/clinical data sets/Final in vivo DO data for analysis (raw and computed).xlsx
-Physio <- readxl::read_excel(file.path(datadir, "Physio.xlsx"), sheet = "Data") |>
-  tibble::column_to_rownames("mouse")
-addcovar <- stats::model.matrix(
-  ~ Gen_Lit + Sex * Diet.name,
-  Physio |> dplyr::select(Gen_Lit, Sex, Diet.name))[,-1]
-intcovar <- addcovar[,"Diet.nameHF", drop = FALSE]
-
-physio_trait <- Physio[, grep(paste(physioname, collapse = "|"), colnames(Physio)), drop = FALSE]
-
-## RNA Data
-
-# Read gene data and combine gene name and ENSEMBL ID.
-gene_trait <- readRDS("data/gene.rds")
-
-gene_trait <- gene_trait[,
-  grep(paste(paste0(genename, "_"), collapse = "|"), colnames(gene_trait)),
-  drop = FALSE]
-```
-
-Isoform data
+# Data Setup
 
 ```{r}
-isoform_trait <- readRDS("data/isoform.rds")
-isoformname <- grep(paste(paste0(genename, "_"), collapse = "|"),
-                          colnames(isoform_trait))
-if(isoformid != "")
-  isoformname <- isoformname[grep(isoformid, colnames(isoform_trait)[isoformname])]
-
-isoform_trait <- isoform_trait[, isoformname, drop = FALSE]
+source("R/setup.R")
 ```
 
 # Trait Scan
@@ -168,7 +130,7 @@ trait_addcoef <- scan1coef(aprobs_chr, physio_trait, kinship_chr, addcovar)
 plot_coef(trait_addcoef, pmap[chrname], columns = 1:8,
           xlim = trait_peaks$pos + c(-1,1))
 abline(v = trait_peaks$pos, col = "grey", lwd = 2)
-title(paste(physioname, "on chr", chrname))
+title(paste(physioshort, "on chr", chrname))
 ```
 
 The following plot is flawed as it only presents part of the solution.
@@ -180,7 +142,7 @@ trait_intcoef <- scan1coef(aprobs_chr, physio_trait, kinship_chr, addcovar,
 plot_coef(trait_intcoef, pmap[chrname], columns = 1:8,
           xlim = trait_peaks$pos + c(-1,1))
 abline(v = trait_peaks$pos, col = "grey", lwd = 2)
-title(paste(physioname, "on chr", chrname, "additive part of diet interaction"))
+title(paste(physioshort, "on chr", chrname, "additive part of diet interaction"))
 ```
 
 Following does separate coefficients by diet. 
@@ -201,7 +163,7 @@ trait_coef_HF <- scan1coef(
 plot_coef(trait_coef_HF, pmap[chrname], columns = 1:8,
           xlim = trait_peaks$pos + c(-1,1))
 abline(v = trait_peaks$pos, col = "grey", lwd = 2)
-title(paste("HF Diet", physioname, "on chr", chrname))
+title(paste("HF Diet", physioshort, "on chr", chrname))
 
 trait_coef_HC <- scan1coef(
   subset(aprobs_chr, ind = id_HC),
@@ -211,7 +173,7 @@ trait_coef_HC <- scan1coef(
 plot_coef(trait_coef_HC, pmap[chrname], columns = 1:8,
           xlim = trait_peaks$pos + c(-1,1))
 abline(v = trait_peaks$pos, col = "grey", lwd = 2)
-title(paste("HC Diet", physioname, "on chr", chrname))
+title(paste("HC Diet", physioshort, "on chr", chrname))
 ```
 
 # SNP Associations
@@ -353,16 +315,16 @@ abline(v = snp_peak$pos, col = "blue", lwd = 2)
 
 ```{r}
 dat <- as.data.frame(cbind(physio_trait, gene_trait, isoform_trait))
-names(dat) <- c(physioname, genename, isoformid)
+names(dat) <- c(physioshort, genename, isoformid)
 ggplot(dat) +
-  aes(.data[[physioname]], .data[[genename]]) +
+  aes(.data[[physioshort]], .data[[genename]]) +
   geom_point() +
   geom_smooth(se = FALSE)
 ```
 
 ```{r}
 ggplot(dat) +
-  aes(.data[[physioname]], .data[[isoformid]]) +
+  aes(.data[[physioshort]], .data[[isoformid]]) +
   geom_point() +
   geom_smooth(se = FALSE)
 ```
@@ -416,16 +378,176 @@ plot(trait_addscan_chr, pmap, col = "green", add = TRUE,
 abline(v = trait_peaks$pos, col = "gray", lwd = 2)
 ```
 
-# Mediation
+### Plot and Analysis of Best SNP by Trait
+
+Proceed here assuming that we are working with `SNP36`.
+If not, get those.
 
 ```{r}
+if(snp36) {
+  asnppr <- qtl2::genoprob_to_snpprob(aprobs_chr, snpinfo)
+} else {
+  asnppr <- snppr
+  snppr <- qtl2::genoprob_to_snpprob(
+    subset(
+      readRDS(file.path(datadir, "fst_genoprob36", "probs_fstindex.rds")),
+        chr = chrname),
+      snpinfo)
+}
+```
 
+```{r}
+asnp_df <- dim(asnppr[[1]])[2] - 1
+asnp_geno <- matrix(NA, nrow(addcovar), length(snp_id) * asnp_df)
+rownames(asnp_geno) <- rownames(addcovar)
+if(asnp_df == 1) {
+  colnames(asnp_geno) <- snp_id
+} else {
+  colnames(asnp_geno) <- paste(rep(snp_id, each = 2), seq(asnp_df), sep = "_")
+}
+asnp_geno[dimnames(asnppr[[1]])[[1]],] <- asnppr[[1]][, -(1 + asnp_df), snp_id]
+```
+
+Combine physio trait (`physio_trait`), gene trait (`gene_trait`)
+and genotype (`snp_geno` or `asnp_geno`) along
+with covariates. Some machinations to impute genotypes from genoprobs.
+
+```{r}
+dat <- as.data.frame(cbind(physio_trait, gene_trait, round(snp_geno, 3)))
+names(dat) <- c(physioshort, genename, "snp1", "snp2")
+dat$snp3 <- round(1 - dat$snp1 - dat$snp2, 3)
+dat <- dplyr::bind_cols(dat, dplyr::select(Physio, Sex,Diet.name)) |>
+  tidyr::unite(SexDiet, Sex, Diet.name, remove = FALSE)
+dat$geno <- unlist(apply(dat[, paste0("snp",1:3)], 1, function(x) {
+  y <- which.max(x)
+  if(length(y) == 0) y <- NA
+  if(!all(is.na(y)) & all(x[y] < 0.75)) y <- NA
+  y
+  }))
+dat <- dplyr::mutate(dat,
+                     geno = ifelse(is.na(geno), NA, c("A","H","B")[geno]),
+                     geno = factor(geno, c("A","H","B")),
+                     asnp = round(asnp_geno[,1], 3),
+                     ageno = round(2 * asnp),
+                     ageno = ifelse(abs(2 * asnp - ageno) > 0.25, NA, ageno),
+                     ageno = ifelse(is.na(ageno), NA, c("A","H","B")[3 - ageno]),
+                     ageno = factor(ageno, c("A","H","B")),
+                     wave = Physio$Gen_Lit)
+```
+
+Examine disagreements of 2-level vs 3-level SNPs
+
+```{r}
+dat |> dplyr::filter(geno != ageno) |> dplyr::select(-(1:2))
+```
+
+Find missing data for 3-level SNPs.
+
+```{r}
+dat |> dplyr::filter(is.na(geno)) |> dplyr::select(-(1:2))
+```
+
+Fill in missing `geno` where possible using `ageno`.
+
+```{r}
+dat <- dplyr::mutate(dat,
+                     geno = ifelse(is.na(geno), as.character(ageno), as.character(geno)),
+                     geno = factor(geno, c("A","H","B")),
+                     add = unclass(geno) - 2,
+                     dom = abs(add))
+```
+
+Plot faceting by sex and diet, with colors for waves.
+
+```{r warning = FALSE}
+ggplot2::ggplot(dat |> dplyr::filter(!is.na(geno))) +
+  ggplot2::aes(x = .data[[genename]], y = .data[[physioshort]]) +
+  ggplot2::geom_jitter(aes(col = geno)) +
+  ggplot2::geom_smooth(col = "black", method = "lm", se = FALSE,
+                       formula = "y~x") +
+  ggplot2::facet_grid(SexDiet ~ geno) +
+  ggplot2::theme(legend.position = "none")
+```
+
+Formal linear model fit without gene or `r genename`.
+
+```{r}
+fit <- lm(formula(paste(physioshort, "~ wave + Sex * Diet.name")),
+          dat)
+```
+
+```{r}
+drop1(fit, fit, test = "F")
+```
+
+Formal linear model fit, allowing for interaction of `r genename` with sex and diet.
+
+```{r}
+fit <- lm(formula(paste(physioshort, "~",
+                        "+ wave + Sex * Diet.name *", genename)),
+          dat)
+```
+
+```{r}
+drop1(fit, fit, test = "F")
+```
+
+Formal linear model fit with predictor `r genename`,
+allowing for interaction of SNP (`geno`) with sex and diet.
+
+```{r}
+fit <- lm(formula(paste(physioshort, "~", genename,
+                        "+ wave + Sex * Diet.name * geno")),
+          dat)
+```
+
+Examine significance of `r genename` as first predictor.
+
+```{r}
+anova(fit)
+```
+
+Type III adjusted tests.
+
+```{r}
+drop1(fit,fit, test="F")
+```
+
+Formal analysis to examine `add`itive and `dom`inance effects.
+
+```{r}
+fit <- lm(formula(paste(physioshort, "~", genename,
+                        "+ wave + Sex * Diet.name * (add + dom)")),
+          dat)
+```
+
+```{r}
+drop1(fit,fit, test="F")
 ```
 
 ```{r}
 knitr::knit_exit()
 ```
 
+# Mediation
+
+```{r}
+medscan <- FALSE # mediation scan is very slow!
+source("R/mediate.R")
+```
+
+```{r}
+if(medscan) ggplot2::autoplot(med_scan)
+```
+
+```{r}
+summary(med_test) |> dplyr::select(id,chr,pos,triad,pvalue,LR_mediation,LR_CMST)
+```
+
+```{r}
+med_effect <- intermediate::mediation_effect(med_test, "symbol")
+ggplot2::autoplot(med_effect)
+```
 ## qtl2pattern
 
 scan1pattern does not pass on incovar yet.
